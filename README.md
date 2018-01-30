@@ -6,6 +6,10 @@ I personally use this for day to day report uploads.
 
 ## Usage Examples
 
+All of the functions have completed PowerShell help comments. You can use those to get a good idea on how those work as well. 
+
+`Get-Help Test-SSRSPath`
+
 #### Connect to the service
 
 At its core all the functions reference the SSRS Serivce Connection. The function `Connect-SSRSService` initiats that connection. Once saved, it can be passed to other functions seemlessly without having to reconnect all of the time. 
