@@ -192,19 +192,15 @@ function Test-SSRSPath{
     <#
     .SYNOPSIS
         Verifies if a given entity path is a valid report entity path. 
- 
     .DESCRIPTION
         Verifies if a given entity path exists on the target Reporting Services proxy that is provided via 
         the ReportPath. This relies heavily on the Find-SSRSEntities cmdlet and is a wrapper for it
-        Returns true of false
- 
+        Returns true of false unless -PassThru is used
     .PARAMETER ReportService
         Report Service object that would have been created using Connect-SSRSService 
         or New-WebServiceProxy
-
     .PARAMETER EntityPath
         Destination path of the SQL Server Reporting Services entity i.e. folder, data source etc.
-
     .PARAMETER EntityType
         Switch used to define EntityPath as a path to a folder, report or other SSRS Object.
         Current supported values are 
@@ -217,16 +213,14 @@ function Test-SSRSPath{
         Model
 
         Report is assumed by default
-
+    .PARAMETER PassThru
+        Tells the function to return the item found down the pipeline. By default a boolean result is returned.
     .EXAMPLE
-        Test-SSRSReportPath -ReportService $ssrsService -EntityPath "/Marketing/Sales" -EntityType Folder
-    
+        Test-SSRSPath -ReportService $ssrsService -EntityPath "/Marketing/Sales" -EntityType Folder
     .EXAMPLE
-        Test-SSRSReportPath -ReportService $ssrsService -EntityPath "/Marketing/Quarterly Sales Report"
-
+        Test-SSRSPath -ReportService $ssrsService -EntityPath "/Marketing/Quarterly Sales Report"
     .EXAMPLE
-        Test-SSRSReportPath -ReportService $ssrsService -Path "/Marketing/Quarterly Sales Report" -EntityType Report
-
+        Test-SSRSPath -ReportService $ssrsService -Path "/Marketing/Quarterly Sales Report" -EntityType Report
     #>
     [CmdletBinding()] 
     param(
@@ -241,13 +235,121 @@ function Test-SSRSPath{
         [Parameter(Position=2)]
         [ValidateSet("Folder", "Report", "Resource", "LinkedReport", "DataSource", "Model")]
         [Alias("Type")]
-        [String]$EntityType = "Report"
+        [String]$EntityType = "Report",
+
+        [switch]$PassThru=$false
     )
     # Split the path into its folder and entity parts
     $SearchPath = Split-SSRSPath $EntityPath -Parent
     $EntityName = Split-Path $EntityPath -Leaf
 
-    (Find-SSRSEntities -ReportService $ReportService -SearchPath $SearchPath -EntityType $EntityType -Match $EntityName -Partial:$false) -as [Boolean]
+    $findSSRSEntriesParameters = @{
+		ReportService = $ReportService 
+		SearchPath    = $SearchPath 
+		EntityType    = $EntityType 
+		Match         = $EntityName 
+		Partial       = $false
+    }
+
+    $result = Find-SSRSEntities @findSSRSEntriesParameters
+    if($PassThru.IsPresent){
+        $result
+    } else {
+        $result -as [Boolean]
+    }
+}
+
+function Move-SSRSEntity{
+    <#
+    .SYNOPSIS
+        Moves an existing entity from one location to another
+ 
+    .DESCRIPTION
+        Validates an entity passed and a target. Attempts to move it to the new location.
+        Full destination path must be specified and can be used to rename the entity
+ 
+    .PARAMETER ReportService
+        Report Service object that would have been created using Connect-SSRSService 
+        or New-WebServiceProxy 
+
+    .PARAMETER EntitySourcePath
+        Path to the entity that will be moved in the Reporting Service
+
+    .PARAMETER EntityDestinationPath
+        Destination path to the new location in the Reporting Service
+
+    .PARAMETER EntityType
+        Validates that the EntitySourcePath is a specific entity type.
+        Current supported values are 
+
+        All
+        Folder
+        Report
+        Resource
+        LinkedReport
+        DataSource
+        Model
+
+        This parameter is optional and All is assumed by default meaning that it does not care.
+ 
+    .EXAMPLE
+        Move-SSRSEntity -ReportService $ssrsService -EntitySourcePath "/folder/report 01" -EntityDestinationPath "/new folder/report 01"
+
+        Move a report from /folder to /new folder
+
+    .EXAMPLE
+        Move-SSRSEntity -ReportService $ssrsService -EntitySourcePath "/folder/" -EntityDestinationPath "/folder 01/folder 02" -EntityType Folder
+
+        Move a folder from / to /folder 01 and rename it to /folder 02
+    #>
+    [CmdletBinding()] 
+    param(
+        [Parameter(Mandatory=$true)]
+        [Alias("Proxy","SSRSService")]
+        [Web.Services.Protocols.SoapHttpClientProtocol]$ReportService,
+ 
+        [Parameter(Position=0,Mandatory,ValueFromPipelineByPropertyName)]
+        [Alias("SourcePath","Path")]
+        [string]$EntitySourcePath,
+
+        [Parameter(Position=1,Mandatory)]
+        [Alias("DestinationPath")]
+        [string]$EntityDestinationPath,
+
+        [Parameter(Position=2)]
+        [ValidateSet("Folder", "Report", "Resource", "LinkedReport", "DataSource", "Model")]
+        [Alias("Type")]
+        [String]$EntityType = "Report"
+    )
+
+    # Validate the item to move actually exists
+    if(-not (Test-SSRSPath -ReportService $ReportService -EntityPath $EntitySourcePath -EntityType $EntityType)){
+        # Check for an existing folder and create if not found
+        Write-Error "The entity at path '$EntitySourcePath' does not exist or is not valid."
+        return
+    }
+ 
+    try
+    {
+        Write-Verbose "Moving '$EntitySourcePath' to '$EntityDestinationPath'"
+ 
+        # Call proxy service to move item
+        # Parameters ItemPath, Target
+        # https://msdn.microsoft.com/en-us/library/reportservice2010.reportingservice2010.moveitem.aspx
+        Write-Verbose "Source Path      : $EntitySourcePath"
+        Write-Verbose "Destination Path : $ReportFolder"
+        $7fssservice.MoveItem($EntitySourcePath,$EntityDestinationPath)
+    } catch [IO.IOException]{
+        Write-Error ("Error while reading report`r`nMessage: '{0}'" -f $SourceFile, $_.Exception.Message)
+    } catch [Web.Services.Protocols.SoapException]{
+        $errorText = $_.Exception.Detail.InnerText
+        if($errorText -match "rsItemAlreadyExists"){
+            Write-Error ("Error while uploading report file`r`nMessage:`r'{0}'" -f "Report already exists. Delete or use -Force" )
+        } else {
+            Write-Error ("Error while uploading report file`r`nMessage:`r`n'{0}'" -f $_.Exception.Detail.InnerText)
+        }
+    }
+ 
 }
 
 function Publish-SSRSReport{
