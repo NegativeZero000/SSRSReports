@@ -410,62 +410,63 @@ function Publish-SSRSReport{
     )
 
 
-
-    # The action we perform on the report differs depending on the parameter set.
-    switch ($PSCmdlet.ParameterSetName){
-        "File"{
-            # Get the report content in bytes
-            Write-Verbose "Reading file: $SourceFile"
-            $Bytes = [System.IO.File]::ReadAllBytes($SourceFile)
-            Write-Verbose "File length in bytes: $($byteArray.Count)"
-            $ReportName = [io.path]::GetFileNameWithoutExtension($SourceFile)
+    process{
+        # The action we perform on the report differs depending on the parameter set.
+        switch ($PSCmdlet.ParameterSetName){
+            "File"{
+                # Get the report content in bytes
+                Write-Verbose "Reading file: $SourceFile"
+                $Bytes = [System.IO.File]::ReadAllBytes($SourceFile)
+                Write-Verbose "File length in bytes: $($byteArray.Count)"
+                $ReportName = [io.path]::GetFileNameWithoutExtension($SourceFile)
+            }
+            "Bytes"{
+                # ReportPath should be the complete path to the report object. Need to split it out 
+                $ReportName = Split-Path $ReportPath -Leaf
+                $ReportFolder = Split-SSRSPath $ReportPath -Parent   
+            }
         }
-        "Bytes"{
-            # ReportPath should be the complete path to the report object. Need to split it out 
-            $ReportName = Split-Path $ReportPath -Leaf
-            $ReportFolder = Split-SSRSPath $ReportPath -Parent   
+
+
+        if(!(Test-SSRSPath -ReportService $ReportService -EntityPath $ReportFolder -EntityType Folder)){
+            # Check for an existing folder and create if not found
+            Write-Error "The path $ReportFolder is does not exist or is not valid."
+            return
         }
-    }
-
-
-    if(!(Test-SSRSPath -ReportService $ReportService -EntityPath $ReportFolder -EntityType Folder)){
-        # Check for an existing folder and create if not found
-        Write-Error "The path $ReportFolder is does not exist or is not valid."
-        return
-    }
  
-    try
-    {
-        Write-Verbose "Uploading to: $reportFolder"
+        try
+        {
+            Write-Verbose "Uploading to: $reportFolder"
  
-        # Call proxy service to upload report
-        # Parameters Report ,Parent, Overwrite, Definition, Properties
-        # https://msdn.microsoft.com/en-us/library/reportservice2005.reportingservice2005.createreport.aspx
-        Write-Verbose "Report Name  : $ReportName"
-        Write-Verbose "Report Folder: $ReportFolder"
-        Write-Verbose "Force switch : $force"
-        $results = $ReportService.CreateReport($ReportName,$ReportFolder,$Force,$Bytes,$null)
-        if(!$results){ 
-            Write-Verbose "Report uploaded."
-        } else { 
-            # Results would contain any upload warnings. Display them now.
-            $results | ForEach-Object {Write-Warning "Upload Message: $($_.Message)" }
-        }
+            # Call proxy service to upload report
+            # Parameters Report ,Parent, Overwrite, Definition, Properties
+            # https://msdn.microsoft.com/en-us/library/reportservice2005.reportingservice2005.createreport.aspx
+            Write-Verbose "Report Name  : $ReportName"
+            Write-Verbose "Report Folder: $ReportFolder"
+            Write-Verbose "Force switch : $force"
+            $results = $ReportService.CreateReport($ReportName,$ReportFolder,$Force,$Bytes,$null)
+            if(!$results){ 
+                Write-Verbose "Report uploaded."
+            } else { 
+                # Results would contain any upload warnings. Display them now.
+                $results | ForEach-Object {Write-Warning "Upload Message: $($_.Message)" }
+            }
 
-        Write-Information "Uploaded report $ReportName to $ReportFolder"
-    }
-    catch [IO.IOException]
-    {
+            Write-Information "Uploaded report $ReportName to $ReportFolder"
+        }
+        catch [IO.IOException]
+        {
         
-        Write-Error ("Error while reading report`r`nMessage: '{0}'" -f $SourceFile, $_.Exception.Message)
-    }
-    catch [Web.Services.Protocols.SoapException]
-    {
-        $errorText = $_.Exception.Detail.InnerText
-        if($errorText -match "rsItemAlreadyExists"){
-            Write-Error ("Error while uploading report file`r`nMessage:`r'{0}'" -f "Report already exists. Delete or use -Force" )
-        } else {
-            Write-Error ("Error while uploading report file`r`nMessage:`r`n'{0}'" -f $_.Exception.Detail.InnerText)
+            Write-Error ("Error while reading report`r`nMessage: '{0}'" -f $SourceFile, $_.Exception.Message)
+        }
+        catch [Web.Services.Protocols.SoapException]
+        {
+            $errorText = $_.Exception.Detail.InnerText
+            if($errorText -match "rsItemAlreadyExists"){
+                Write-Error ("Error while uploading report file`r`nMessage:`r'{0}'" -f "Report already exists. Delete or use -Force" )
+            } else {
+                Write-Error ("Error while uploading report file`r`nMessage:`r`n'{0}'" -f $_.Exception.Detail.InnerText)
+            }
         }
     }
  
@@ -772,21 +773,23 @@ function Update-SSRSReportDataSource{
     $currentDatasources = Get-SSRSReportDataSources -ReportService $ReportService -ReportPath $ReportPath
 
     # Check the datasource count. If there is more than one error since we don't want to risk changing too much
-    if($currentDatasources.Count -gt 1){throw "There are too many datasources. Failing as to not risk changes."}
-
-    try{
-        # Using the datasource path build a datasource object to add to the report using the current datasource name
-        $newDataSource = New-Object "$ssrsServiceNamespace.DataSource"
-        $newDataSource.Name = $currentDatasources.DataSourceName
-        $newDataSource.Item = New-Object ("$ssrsServiceNamespace.DataSourceReference")
-        $newDataSource.Item.Reference = $DataSourcePath
-        Write-Verbose "New Datasource Name     : $($newDataSource.Name)"
-        Write-Verbose "New Datasource Reference: $($newDataSource.Reference)"
+    if($currentDatasources.Count -eq 1){
+        try{
+            # Using the datasource path build a datasource object to add to the report using the current datasource name
+            $newDataSource = New-Object "$ssrsServiceNamespace.DataSource"
+            $newDataSource.Name = $currentDatasources.DataSourceName
+            $newDataSource.Item = New-Object ("$ssrsServiceNamespace.DataSourceReference")
+            $newDataSource.Item.Reference = $DataSourcePath
+            Write-Verbose "New Datasource Name     : $($newDataSource.Name)"
+            Write-Verbose "New Datasource Reference: $($newDataSource.Reference)"
         
-        $ReportService.SetItemDataSources($reportPath, $newDataSource)
-        Write-Information "The report '$reportpath' datasource was updated to '$DataSourcePath'" 
-    } catch {
-        Write-Error ("Unable to update report datasource: `r`n $_")
+            $ReportService.SetItemDataSources($reportPath, $newDataSource)
+            Write-Information "The report '$reportpath' datasource was updated to '$DataSourcePath'" 
+        } catch {
+            Write-Error ("Unable to update report datasource: `r`n $_")
+        }
+    } else {
+        Write-Error "There are too many datasources. Failing as to not risk changes."
     }
 }
 
